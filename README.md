@@ -1,6 +1,6 @@
 # 🎾 Tennis Match Outcome Predictor
 
-**Resume Project:** Machine Learning pipeline to predict ATP tennis match outcomes using historical data (2020-2024).
+Machine Learning pipeline to predict ATP tennis match outcomes using historical data (2020-2024).
 
 ## 📌 Project Overview
 This project builds a Binary Classification model to predict whether Player A will beat Player B based on historical stats. Unlike simple rank-based predictions, this model engineers complex time-series features to capture player form and matchup compatibility.
