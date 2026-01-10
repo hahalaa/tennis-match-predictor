@@ -181,7 +181,7 @@ def add_features(df: pd.DataFrame):
         if pair not in h2h_history:
             h2h_history[pair] = [0, 0]
 
-        # Expanded winner_index logic
+        # Compute winner index
         if p1_won and p1 == pair[0]:
             winner_index = 0
         elif not p1_won and p1 != pair[0]:
@@ -202,6 +202,10 @@ def add_features(df: pd.DataFrame):
 # 4. MODEL TRAINING
 # ==========================================
 def train_and_evaluate(df):
+    """
+    Train multiple models and evaluate on the test year.
+    Returns the best-performing model based on test accuracy.
+    """
     print("🧠 Training models...")
     
     # Split by Year (Train: <2025, Test: 2025)
@@ -277,14 +281,32 @@ def interactive_prediction_loop(model, data, surf_hist, h2h_hist):
             surf = input("Enter Surface (Hard, Clay, Grass): ").strip().capitalize()
             if surf.lower() == 'exit': break
             
-            # --- GET DATA ---
-            def get_latest(name):
-                # Find most recent match for this player to get rank/age
-                mask = (data['p1_name'] == name) | (data['p2_name'] == name)
-                matches = data[mask].sort_values('tourney_date', ascending=False)
-                if matches.empty: return None, None
-                match = matches.iloc[0]
-                return (match['p1_rank'], match['p1_age']) if match['p1_name'] == name else (match['p2_rank'], match['p2_age'])
+            def get_latest(name: str, data: pd.DataFrame):
+                """
+                Get the most recent match for a player and return their rank and age.
+                
+                Returns:
+                    (rank, age) if found, else (None, None)
+                """
+                # Filter matches involving this player
+                player_mask = (data['p1_name'] == name) | (data['p2_name'] == name)
+                player_matches = data.loc[player_mask]
+
+                if player_matches.empty:
+                    return None, None
+
+                # Sort by date descending to get the latest match
+                latest_match = player_matches.sort_values('tourney_date', ascending=False).iloc[0]
+
+                # Determine if player was P1 or P2 in that match
+                if latest_match['p1_name'] == name:
+                    rank = latest_match['p1_rank']
+                    age  = latest_match['p1_age']
+                else:
+                    rank = latest_match['p2_rank']
+                    age  = latest_match['p2_age']
+
+                return rank, age
 
             p1_stats = get_latest(p1)
             p2_stats = get_latest(p2)
