@@ -58,37 +58,55 @@ def load_atp_data(start_year: int, end_year: int) -> pd.DataFrame:
 # ==========================================
 # 2. DATA PREPROCESSING
 # ==========================================
-def preprocess_data(df):
-    df_processed = df.copy()
-    
-    # Fill missing values to prevent errors
-    df_processed['winner_rank'] = df_processed['winner_rank'].fillna(2000)
-    df_processed['loser_rank'] = df_processed['loser_rank'].fillna(2000)
-    df_processed['winner_age'] = df_processed['winner_age'].fillna(df_processed['winner_age'].median())
-    df_processed['loser_age']  = df_processed['loser_age'].fillna(df_processed['loser_age'].median())
-    
-    # Randomly shuffle Winner/Loser to create a balanced "Player 1 vs Player 2" dataset
-    np.random.seed(42)
-    swap_mask = np.random.rand(len(df_processed)) > 0.5
-    
-    new_df = pd.DataFrame()
-    new_df['tourney_date'] = df_processed['tourney_date']
-    new_df['surface'] = df_processed['surface']
-    new_df['tourney_level'] = df_processed['tourney_level']
-    
-    # Assign P1/P2 based on mask
-    new_df['p1_name'] = np.where(swap_mask, df_processed['loser_name'], df_processed['winner_name'])
-    new_df['p1_rank'] = np.where(swap_mask, df_processed['loser_rank'], df_processed['winner_rank'])
-    new_df['p1_age']  = np.where(swap_mask, df_processed['loser_age'], df_processed['winner_age'])
-    
-    new_df['p2_name'] = np.where(swap_mask, df_processed['winner_name'], df_processed['loser_name'])
-    new_df['p2_rank'] = np.where(swap_mask, df_processed['winner_rank'], df_processed['loser_rank'])
-    new_df['p2_age']  = np.where(swap_mask, df_processed['winner_age'], df_processed['loser_age'])
-    
-    # Target: 1 if P1 won, 0 if P1 lost
-    new_df['target'] = np.where(swap_mask, 0, 1)
-    
+def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Preprocess raw ATP match data by:
+    - Handling missing values
+    - Randomizing player order to create a balanced
+      Player 1 vs Player 2 dataset
+    - Creating a binary target (1 = P1 win, 0 = P1 loss)
+    """
+    df = df.copy()
+
+    # --------------------------
+    # Handle missing values
+    # --------------------------
+    df["winner_rank"] = df["winner_rank"].fillna(2000)
+    df["loser_rank"]  = df["loser_rank"].fillna(2000)
+
+    df["winner_age"] = df["winner_age"].fillna(df["winner_age"].median())
+    df["loser_age"]  = df["loser_age"].fillna(df["loser_age"].median())
+
+    # --------------------------
+    # Randomise player order
+    # --------------------------
+    rng = np.random.default_rng(seed=42)
+    swap = rng.random(len(df)) > 0.5
+
+    # --------------------------
+    # Build Player 1 / Player 2 dataset
+    # --------------------------
+    new_df = pd.DataFrame({
+        "tourney_date": df["tourney_date"],
+        "surface": df["surface"],
+        "tourney_level": df["tourney_level"],
+
+        "p1_name": np.where(swap, df["loser_name"], df["winner_name"]),
+        "p1_rank": np.where(swap, df["loser_rank"], df["winner_rank"]),
+        "p1_age":  np.where(swap, df["loser_age"],  df["winner_age"]),
+
+        "p2_name": np.where(swap, df["winner_name"], df["loser_name"]),
+        "p2_rank": np.where(swap, df["winner_rank"], df["loser_rank"]),
+        "p2_age":  np.where(swap, df["winner_age"],  df["loser_age"]),
+    })
+
+    # --------------------------
+    # Target: did Player 1 win?
+    # --------------------------
+    new_df["target"] = (~swap).astype(int)
+
     return new_df
+
 
 # ==========================================
 # 3. FEATURE ENGINEERING
