@@ -26,22 +26,34 @@ MODEL_FEATURES = [
 # ==========================================
 # 1. DATA LOADING
 # ==========================================
-def load_atp_data(start_year, end_year):
-    base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_{}.csv"
-    all_matches = []
-    print(f"⬇️  Downloading data from {start_year} to {end_year}...")
+def load_atp_data(start_year: int, end_year: int) -> pd.DataFrame:
+    """
+    Download ATP match data from Jeff Sackmann's GitHub repository
+    for a given range of years as CSV files (inclusive).
+
+    Returns a single pandas DataFrame containing all matches.
+    """
+    BASE_URL = (
+        "https://raw.githubusercontent.com/"
+        "JeffSackmann/tennis_atp/master/atp_matches_{}.csv"
+    )
+
+    yearly_dfs = []
+    print(f"⬇️  Downloading ATP data from {start_year} to {end_year}...")
 
     for year in range(start_year, end_year + 1):
-        url = base_url.format(year)
         try:
-            df = pd.read_csv(url, on_bad_lines='skip')
-            df['year'] = year
-            all_matches.append(df)
-            print(f"   - Loaded {year}: {df.shape[0]} matches")
-        except Exception as e:
-            print(f"   - Error loading {year}: {e}")
+            url = BASE_URL.format(year)
+            df = pd.read_csv(url, on_bad_lines="skip")
+            df["year"] = year
+            yearly_dfs.append(df)
 
-    return pd.concat(all_matches, ignore_index=True)
+            print(f"   ✓ Loaded {year}: {len(df)} matches")
+
+        except Exception as err:
+            print(f"   ✗ Failed to load {year}: {err}")
+
+    return pd.concat(yearly_dfs, ignore_index=True)
 
 # ==========================================
 # 2. DATA PREPROCESSING
@@ -143,7 +155,7 @@ def add_features(df):
 def train_and_evaluate(df):
     print("🧠 Training models...")
     
-    # Split by Year (Train: <2024, Test: 2024)
+    # Split by Year (Train: <2025, Test: 2025)
     train_mask = df['tourney_date'].dt.year < END_YEAR
     test_mask = df['tourney_date'].dt.year == END_YEAR
     
@@ -169,7 +181,7 @@ def train_and_evaluate(df):
         results[name] = acc
         print(f"   - {name}: {acc:.4f}")
         
-        if acc > best_acc and name == "Random Forest": # We prefer RF for this project
+        if acc > best_acc:
             best_model = model
             best_acc = acc
 
