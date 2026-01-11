@@ -1,0 +1,158 @@
+import config
+import sys
+import pandas as pd
+
+# ==========================================
+# 5. INTERACTIVE PREDICTION LOOP
+# ==========================================
+def interactive_prediction_loop(model, data, surf_hist, h2h_hist):
+    """
+    Runs a REPL-style loop for predicting tennis matches.
+    Prompts for two player names and a surface, then predicts
+    the winner using the provided model and historical stats.
+    """
+    print("\n" + "="*40)
+    print(" 🎾  TENNIS MATCH PREDICTOR  🎾")
+    print("="*40)
+    print("Type 'exit' to quit. Use Ctrl+C to stop safely.\n")
+
+    while True:
+        try:
+            p1 = input("Enter Player 1 (e.g. Carlos Alcaraz): ").strip()
+            if p1.lower() == 'exit': break
+            p2 = input("Enter Player 2 (e.g. Jannik Sinner): ").strip()
+            if p2.lower() == 'exit': break
+
+            surf_input = input("Enter Surface (Hard, Clay, Grass): ")
+            surf = validate_surface(surf_input)
+
+            if surf is None:
+                print("❌ Invalid surface. Choose Hard, Clay, or Grass.\n")
+                continue
+
+            p1_stats = get_latest(p1, data)
+            p2_stats = get_latest(p2, data)
+
+            if not p1_stats[0] or not p2_stats[0]:
+                print(f"❌ Error: Player not found in database.\n")
+                continue
+                
+            p1_rank, p1_age = p1_stats
+            p2_rank, p2_age = p2_stats
+            
+            p1_w, p1_t = get_surf_record(p1, surf, surf_hist)
+            p2_w, p2_t = get_surf_record(p2, surf, surf_hist)
+
+            p1_pct = p1_w/p1_t if p1_t > 0 else config.DEFAULT_WIN_PCT
+            p2_pct = p2_w/p2_t if p2_t > 0 else config.DEFAULT_WIN_PCT
+
+            diff, h2h_msg = compute_h2h(p1, p2, h2h_hist)
+
+            # Predict
+            input_data = build_feature_row(
+                p1_rank, p2_rank,
+                p1_age, p2_age,
+                p1_pct, p2_pct,
+                diff
+            )
+            prob = model.predict_proba(input_data)[0][1] # Probability P1 wins
+
+            display_matchup(p1, p2, surf, p1_rank, p2_rank, p1_age, p2_age, p1_pct, p2_pct, p1_w, p1_t, p2_w, p2_t, h2h_msg, prob)
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Exiting. Thank you!")
+            sys.exit()
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+# =========================
+# Helper functions
+# =========================
+def validate_surface(s: str) -> str | None:
+    s = s.strip().capitalize()
+    return s if s in config.VALID_SURFACES else None
+
+def get_latest(name: str, data: pd.DataFrame):
+    """
+    Get the most recent match for a player and return their rank and age.
+
+    Returns:
+        (rank, age) if found, else (None, None)
+    """
+    player_mask = (data['p1_name'] == name) | (data['p2_name'] == name)
+    player_matches = data.loc[player_mask]
+
+    if player_matches.empty:
+        return None, None
+
+    latest_match = player_matches.sort_values('tourney_date', ascending=False).iloc[0]
+
+    if latest_match['p1_name'] == name:
+        return latest_match['p1_rank'], latest_match['p1_age']
+    else:
+        return latest_match['p2_rank'], latest_match['p2_age']
+
+def get_surf_record(player: str, surf: str, surf_hist: dict) -> tuple[int,int]:
+    """
+    Get a player's historical surface record (wins, total matches).
+    Returns (wins, total) or (0,0) if no history.
+    """
+    if player in surf_hist and surf in surf_hist[player]:
+        return surf_hist[player][surf]
+    return 0, 0
+
+def compute_h2h(p1: str, p2: str, h2h_hist: dict) -> tuple[int,str]:
+    """
+    Returns (diff, message) for head-to-head history between p1 and p2.
+    """
+    key = tuple(sorted([p1, p2]))
+    if key not in h2h_hist:
+        return 0, "No prior matches"
+    
+    w1, w2 = h2h_hist[key]
+    p1_wins = w1 if p1 == key[0] else w2
+    p2_wins = w2 if p1 == key[0] else w1
+    diff = p1_wins - p2_wins
+
+    if p1_wins == p2_wins:
+        msg = f"Tied {p1_wins}-{p2_wins}"
+    else:
+        leader = p1 if p1_wins > p2_wins else p2
+        msg = f"{leader} leads {max(p1_wins, p2_wins)}-{min(p1_wins, p2_wins)}"
+    
+    return diff, msg
+
+def display_matchup(
+    p1: str, p2: str, surf: str, p1_rank: float, p2_rank: float, 
+    p1_age: float, p2_age: float, p1_pct: float, p2_pct: float,
+    p1_w: int, p1_t: int, p2_w: int, p2_t: int, h2h_msg: str, prob: float
+) -> None:
+    print(f"\n📊 MATCHUP STATS: {surf} Court")
+    print(f"{'':<20} {p1:<20} {p2:<20}")
+    print(f"{'Rank':<20} #{int(p1_rank):<19} #{int(p2_rank):<19}")
+    print(f"{'Age':<20} {p1_age:.1f}y{'':<18} {p2_age:.1f}y")
+    print(f"{'Surface Rec':<20} {p1_pct:.0%} ({p1_w}-{p1_t-p1_w}){'':<12} {p2_pct:.0%} ({p2_w}-{p2_t-p2_w})")
+    print(f"{'Head-to-Head':<20} {h2h_msg}")
+    print("-" * 60)
+    if prob > config.DEFAULT_WIN_PCT:
+        print(f"🏆 WINNER PREDICTION: {p1} ({prob:.1%} confidence)")
+    else:
+        print(f"🏆 WINNER PREDICTION: {p2} ({1-prob:.1%} confidence)")
+    print("-" * 60 + "\n")
+
+def build_feature_row(
+    p1_rank: float,
+    p2_rank: float,
+    p1_age: float,
+    p2_age: float,
+    p1_pct: float,
+    p2_pct: float,
+    h2h_diff: int
+) -> pd.DataFrame:
+    """
+    Build a single-row DataFrame matching MODEL_FEATURES order.
+    """
+    return pd.DataFrame(
+        [[p1_rank, p2_rank, p1_age, p2_age, p1_pct, p2_pct, h2h_diff]],
+        columns = config.MODEL_FEATURES
+    )
