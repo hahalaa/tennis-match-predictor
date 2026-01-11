@@ -1,3 +1,7 @@
+import joblib  # Standard for saving ML models
+from pathlib import Path
+import os
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,7 +16,7 @@ from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score
 
 # Constants
-START_YEAR = 2015
+START_YEAR = 2014
 END_YEAR = 2024
 ACCURACY_PLOT = "accuracy_comparison.png"
 FEATURE_IMPORTANCE_PLOT = "feature_importance.png"
@@ -82,7 +86,7 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # Randomise player order
     rng = np.random.default_rng(seed=42)
-    player_order_swapped = rng.random(len(df)) > DEFAULT_WIN_PCT
+    swap_players = rng.random(len(df)) > DEFAULT_WIN_PCT
 
     # Build Player 1 / Player 2 dataset
     new_df = pd.DataFrame({
@@ -90,17 +94,17 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
         "surface": df["surface"],
         "tourney_level": df["tourney_level"],
 
-        "p1_name": np.where(player_order_swapped, df["loser_name"], df["winner_name"]),
-        "p1_rank": np.where(player_order_swapped, df["loser_rank"], df["winner_rank"]),
-        "p1_age":  np.where(player_order_swapped, df["loser_age"],  df["winner_age"]),
+        "p1_name": np.where(swap_players, df["loser_name"], df["winner_name"]),
+        "p1_rank": np.where(swap_players, df["loser_rank"], df["winner_rank"]),
+        "p1_age":  np.where(swap_players, df["loser_age"],  df["winner_age"]),
 
-        "p2_name": np.where(player_order_swapped, df["winner_name"], df["loser_name"]),
-        "p2_rank": np.where(player_order_swapped, df["winner_rank"], df["loser_rank"]),
-        "p2_age":  np.where(player_order_swapped, df["winner_age"],  df["loser_age"]),
+        "p2_name": np.where(swap_players, df["winner_name"], df["loser_name"]),
+        "p2_rank": np.where(swap_players, df["winner_rank"], df["loser_rank"]),
+        "p2_age":  np.where(swap_players, df["winner_age"],  df["loser_age"]),
     })
 
     # Target: did Player 1 win?
-    new_df["target"] = (~player_order_swapped).astype(int)
+    new_df["target"] = (~swap_players).astype(int)
 
     return new_df
 
@@ -127,12 +131,16 @@ def add_features(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
     h2h_diff = []
 
     def surface_win_pct(player, surface):
+        if surface == "Unknown":
+            return DEFAULT_WIN_PCT
+
         if player in surface_history and surface in surface_history[player]:
             wins, total = surface_history[player][surface]
             if total > 0:
                 return wins / total
             else:
                 return DEFAULT_WIN_PCT
+            
         return DEFAULT_WIN_PCT
 
     def update_surface(player, surface, won):
@@ -147,7 +155,7 @@ def add_features(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
     for _, row in df.iterrows():
         p1 = row["p1_name"]
         p2 = row["p2_name"]
-        surface = row["surface"]
+        surface = row["surface"] if pd.notna(row["surface"]) else "Unknown"
         p1_won = row["target"] == 1
 
         # Surface features
@@ -177,9 +185,7 @@ def add_features(df: pd.DataFrame) -> tuple[pd.DataFrame, dict, dict]:
             h2h_history[pair] = [0, 0]
 
         # Compute winner index
-        if p1_won and p1 == pair[0]:
-            winner_index = 0
-        elif not p1_won and p1 != pair[0]:
+        if (p1_won and p1 == pair[0]) or (not p1_won and p1 != pair[0]):
             winner_index = 0
         else:
             winner_index = 1
@@ -250,6 +256,10 @@ def plot_feature_importance(model):
     """
     Plot and display feature importance and save it to a PNG file.
     """
+    if not hasattr(model, "feature_importances_"):
+        print("⚠️ Selected model does not support feature importance.")
+        return
+
     importances = model.feature_importances_
     df_imp = pd.DataFrame({'Feature': MODEL_FEATURES, 'Importance': importances}).sort_values('Importance', ascending=False)
     
@@ -289,7 +299,6 @@ def get_latest(name: str, data: pd.DataFrame):
         return latest_match['p1_rank'], latest_match['p1_age']
     else:
         return latest_match['p2_rank'], latest_match['p2_age']
-
 
 def get_surf_record(player: str, surf: str, surf_hist: dict) -> tuple[int,int]:
     """
@@ -339,6 +348,23 @@ def display_matchup(
         print(f"🏆 WINNER PREDICTION: {p2} ({1-prob:.1%} confidence)")
     print("-" * 60 + "\n")
 
+def build_feature_row(
+    p1_rank: float,
+    p2_rank: float,
+    p1_age: float,
+    p2_age: float,
+    p1_pct: float,
+    p2_pct: float,
+    h2h_diff: int
+) -> pd.DataFrame:
+    """
+    Build a single-row DataFrame matching MODEL_FEATURES order.
+    """
+    return pd.DataFrame(
+        [[p1_rank, p2_rank, p1_age, p2_age, p1_pct, p2_pct, h2h_diff]],
+        columns=MODEL_FEATURES
+    )
+
 # ==========================================
 # 5. INTERACTIVE PREDICTION LOOP
 # ==========================================
@@ -385,8 +411,13 @@ def interactive_prediction_loop(model, data, surf_hist, h2h_hist):
 
             diff, h2h_msg = compute_h2h(p1, p2, h2h_hist)
 
-            # --- PREDICT ---
-            input_data = pd.DataFrame([[p1_rank, p2_rank, p1_age, p2_age, p1_pct, p2_pct, diff]], columns=MODEL_FEATURES)
+            # Predict
+            input_data = build_feature_row(
+                p1_rank, p2_rank,
+                p1_age, p2_age,
+                p1_pct, p2_pct,
+                diff
+            )
             prob = model.predict_proba(input_data)[0][1] # Probability P1 wins
 
             display_matchup(p1, p2, surf, p1_rank, p2_rank, p1_age, p2_age, p1_pct, p2_pct, p1_w, p1_t, p2_w, p2_t, h2h_msg, prob)
@@ -397,14 +428,62 @@ def interactive_prediction_loop(model, data, surf_hist, h2h_hist):
         except Exception as e:
             print(f"An error occurred: {e}")
 
+def load_cached_data(
+    path: Path,
+    start_year: int,
+    end_year: int
+) -> pd.DataFrame | None:
+    """
+    Load cached ATP data if it exists and covers the required year range.
+    Returns None if cache is missing or outdated.
+    """
+    if not path.exists():
+        return None
+
+    print(f"📂 Loading cached data from {path}...")
+    df = pd.read_csv(path)
+    df['tourney_date'] = pd.to_datetime(df['tourney_date'], format="%Y%m%d", errors="coerce")
+
+    cached_min = df['year'].min()
+    cached_max = df['year'].max()
+
+    if cached_min > start_year or cached_max < end_year:
+        print(f"⚠️  Cache outdated (Have {cached_min}-{cached_max}, need {start_year}-{end_year})")
+        return None
+
+    return df
+
 # ==========================================
 # MAIN EXECUTION
 # ==========================================
 def main():
-    data = load_atp_data(START_YEAR, END_YEAR)
+    # Define paths
+    DATA_PATH = Path("atp_tennis_data.csv")
+    MODEL_PATH = Path("tennis_model.pkl")
+
+    # 1. Load Data (Smart Caching)
+    data = load_cached_data(DATA_PATH, START_YEAR, END_YEAR)
+
+    if data is None:
+        data = load_atp_data(START_YEAR, END_YEAR)
+        data.to_csv(DATA_PATH, index=False)
+        print(f"💾 New data saved to {DATA_PATH}")
+
+    # 2. Process & Engineer Features
+    # We always re-run this to ensure history dicts are fresh for the interactive loop
     processed_data = preprocess_data(data)
     final_df, surf_history, h2h_history = add_features(processed_data)
-    rf_model = train_and_evaluate(final_df)
+    
+    # 3. Model Training (with Caching)
+    if MODEL_PATH.exists():
+        print(f"📂 Loading trained model from {MODEL_PATH}...")
+        rf_model = joblib.load(MODEL_PATH)
+    else:
+        rf_model = train_and_evaluate(final_df)
+        joblib.dump(rf_model, MODEL_PATH)
+        print(f"💾 Model saved to {MODEL_PATH}")
+
+    # 4. Interactive Mode
     plot_feature_importance(rf_model)
     interactive_prediction_loop(rf_model, final_df, surf_history, h2h_history)
 
